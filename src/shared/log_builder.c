@@ -50,6 +50,16 @@ STATIC int log_builder_update_host_ip(log_builder_t * builder);
 /* Number of seconds of how often the IP must be updated. */
 STATIC int g_ip_update_interval = 0;
 
+/* Host IP cache shared by every builder of the process, and the time of its last request. */
+STATIC char g_host_ip[IPSIZE] = { '\0' };
+STATIC time_t g_host_ip_last_update = 0;
+
+/* Set once the host IP source has been reached, whatever it answered. */
+STATIC bool g_host_ip_requested = false;
+
+/* Set by the first log built with $(host_ip). Until then the host IP is only requested once. */
+STATIC atomic_int_t g_host_ip_used = ATOMIC_INT_INITIALIZER(0);
+
 // Initialize a log builder structure
 log_builder_t * log_builder_init(bool update) {
     log_builder_t * builder;
@@ -177,6 +187,10 @@ char * log_builder_build(log_builder_t * builder, const char * pattern, const ch
             field = builder->host_name;
         } else if (strcmp(param, "host_ip") == 0) {
             field = builder->host_ip;
+
+            if (!atomic_int_get(&g_host_ip_used)) {
+                atomic_int_set(&g_host_ip_used, 1);
+            }
         } else if (strcmp(param, "json_escaped_log") == 0) {
             field = escaped_log = wstr_escape_json(logmsg);
         } else if (strcmp(param, "base64_log") == 0) {
@@ -245,22 +259,24 @@ int log_builder_update_hostname(log_builder_t * builder) {
 
 // Update the host's IP value
 int log_builder_update_host_ip(log_builder_t * builder) {
-    static char host_ip[IPSIZE] = { '\0' };
-    static time_t last_update = 0;
     time_t now = time(NULL);
 
-    if (g_ip_update_interval > 0 && (now - last_update) >= g_ip_update_interval) {
-        last_update = now;
+    // Resolving the host IP lists every network interface, so it is only refreshed once a log uses it.
+    if (g_ip_update_interval > 0 && (now - g_host_ip_last_update) >= g_ip_update_interval &&
+        (!g_host_ip_requested || atomic_int_get(&g_host_ip_used))) {
+        g_host_ip_last_update = now;
 #ifdef WIN32
         char * tmp_host_ip = get_agent_ip_legacy_win32();
 
         if (tmp_host_ip) {
-            strncpy(host_ip, tmp_host_ip, IPSIZE - 1);
+            strncpy(g_host_ip, tmp_host_ip, IPSIZE - 1);
             os_free(tmp_host_ip);
         } else {
             mdebug1("Cannot update host IP.");
-            *host_ip = '\0';
+            *g_host_ip = '\0';
         }
+
+        g_host_ip_requested = true;
 
 #elif defined __linux__ || defined __MACH__ || defined sun || defined FreeBSD || defined OpenBSD
         const char * REQUEST = "host_ip";
@@ -268,22 +284,23 @@ int log_builder_update_host_ip(log_builder_t * builder) {
 
         if (sock == -1) {
             mdebug1("Cannot update host IP: The control module is not available: %s (%d)", strerror(errno), errno);
-            last_update = 0;
+            g_host_ip_last_update = 0;
         } else {
             if (send(sock, REQUEST, strlen(REQUEST), 0) > 0) {
-                if (recv(sock, host_ip, IPSIZE - 1, 0) < 0) {
+                if (recv(sock, g_host_ip, IPSIZE - 1, 0) < 0) {
                     mdebug1("The control module did not respond: %s (%d).", strerror(errno), errno);
-                    *host_ip = '\0';
+                    *g_host_ip = '\0';
                 }
             }
 
             close(sock);
+            g_host_ip_requested = true;
         }
 #endif
     }
     rwlock_lock_write(&builder->rwlock);
-    if (*host_ip != '\0' && strcmp(host_ip, "Err")) {
-        strcpy(builder->host_ip, host_ip);
+    if (*g_host_ip != '\0' && strcmp(g_host_ip, "Err")) {
+        strcpy(builder->host_ip, g_host_ip);
     } else {
         strncpy(builder->host_ip, "0.0.0.0", IPSIZE - 1);
     }

@@ -64,7 +64,8 @@ int log_builder_update(log_builder_t * builder);
  * - $(timestamp): Current timestamp in RFC3164 format.
  * - $(timestamp <format>): Current timestamp, in strftime string format.
  * - $(hostname): System's host name.
- * - $(host_ip): Host's primary IP.
+ * - $(host_ip): Host's primary IP. It is resolved at startup and refreshed every
+ *   logcollector.ip_update_interval seconds once a log has used it.
  *
  * @param builder Pointer to a log builder structure.
  * @param pattern String holding the log format.
