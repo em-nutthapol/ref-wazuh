@@ -36,6 +36,7 @@ All notable changes to this project will be documented in this file.
 - Fixed `wazuh-logcollector` silently discarding, in `mysql_log`, the MySQL 5.7+ general log, the MariaDB error log, the MySQL 5.x and MariaDB lines written before 10:00, and the general log lines that share their second with the previous one. ([#41333](https://github.com/wazuh/wazuh/pull/41333))
 - Fixed the CIS-CAT module on Linux and Unix stopping its evaluations until `wazuh-modulesd` was restarted. ([#41531](https://github.com/wazuh/wazuh/pull/41531))
 - Fixed the CPU name being reported empty on arm64 and POWER Linux agents. ([#41569](https://github.com/wazuh/wazuh/pull/41569))
+- Fixed the MS Graph module applying `only_future_events` only to the first tenant it scanned after a start, and the MS Graph and Office 365 modules sending the same events again at every scan while the API returned a URL out of the configured host. ([#41564](https://github.com/wazuh/wazuh/pull/41564))
 
 ### Other
 
