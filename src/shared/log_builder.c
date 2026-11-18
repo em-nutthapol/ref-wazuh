@@ -54,16 +54,11 @@ STATIC int g_ip_update_interval = 0;
 STATIC char g_host_ip[IPSIZE] = { '\0' };
 STATIC time_t g_host_ip_last_update = 0;
 
-/* Set once the host IP source has been reached, whatever it answered. */
-STATIC bool g_host_ip_requested = false;
-
-/* Set by the first log built with $(host_ip). Until then the host IP is only requested once. */
-STATIC atomic_int_t g_host_ip_used = ATOMIC_INT_INITIALIZER(0);
-
 // Initialize a log builder structure
-log_builder_t * log_builder_init(bool update) {
+log_builder_t * log_builder_init(bool update, bool host_ip_used) {
     log_builder_t * builder;
     os_calloc(1, sizeof(log_builder_t), builder);
+    builder->host_ip_used = host_ip_used;
 
     {
         g_ip_update_interval = getDefine_Int("logcollector","ip_update_interval", 0, 3600);
@@ -187,10 +182,6 @@ char * log_builder_build(log_builder_t * builder, const char * pattern, const ch
             field = builder->host_name;
         } else if (strcmp(param, "host_ip") == 0) {
             field = builder->host_ip;
-
-            if (!atomic_int_get(&g_host_ip_used)) {
-                atomic_int_set(&g_host_ip_used, 1);
-            }
         } else if (strcmp(param, "json_escaped_log") == 0) {
             field = escaped_log = wstr_escape_json(logmsg);
         } else if (strcmp(param, "base64_log") == 0) {
@@ -257,13 +248,17 @@ int log_builder_update_hostname(log_builder_t * builder) {
     return retval;
 }
 
+// Check whether a log format uses the host IP
+bool log_builder_uses_host_ip(const char * pattern) {
+    return pattern != NULL && strstr(pattern, "$(host_ip)") != NULL;
+}
+
 // Update the host's IP value
 int log_builder_update_host_ip(log_builder_t * builder) {
     time_t now = time(NULL);
 
-    // Resolving the host IP lists every network interface, so it is only refreshed once a log uses it.
-    if (g_ip_update_interval > 0 && (now - g_host_ip_last_update) >= g_ip_update_interval &&
-        (!g_host_ip_requested || atomic_int_get(&g_host_ip_used))) {
+    // Resolving the host IP lists every network interface, so it is skipped when no log format uses it.
+    if (builder->host_ip_used && g_ip_update_interval > 0 && (now - g_host_ip_last_update) >= g_ip_update_interval) {
         g_host_ip_last_update = now;
 #ifdef WIN32
         char * tmp_host_ip = get_agent_ip_legacy_win32();
@@ -275,8 +270,6 @@ int log_builder_update_host_ip(log_builder_t * builder) {
             mdebug1("Cannot update host IP.");
             *g_host_ip = '\0';
         }
-
-        g_host_ip_requested = true;
 
 #elif defined __linux__ || defined __MACH__ || defined sun || defined FreeBSD || defined OpenBSD
         const char * REQUEST = "host_ip";
@@ -294,7 +287,6 @@ int log_builder_update_host_ip(log_builder_t * builder) {
             }
 
             close(sock);
-            g_host_ip_requested = true;
         }
 #endif
     }
