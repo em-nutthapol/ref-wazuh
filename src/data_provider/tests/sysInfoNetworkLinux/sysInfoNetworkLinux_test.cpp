@@ -607,7 +607,7 @@ namespace
         return NetworkLinuxInterface::parseGatewaysV4(stream);
     }
 
-    // The per-interface parse the wrapper constructor ran before the table was shared.
+    // The per-interface parse the wrapper constructor ran before the table was shared, with stoul so it also runs on 32-bit.
     IPv4Gateway parsePerInterface(const std::string& table, const std::string& ifName)
     {
         IPv4Gateway retVal;
