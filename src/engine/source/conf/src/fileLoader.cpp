@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+#include <cerrno>
+#include <cstring>
 #include <filesystem>
-#include <fstream>
+#include <istream>
+
+#include <ext/stdio_filebuf.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <base/logging.hpp>
 #include <base/utils/stringUtils.hpp>
@@ -34,15 +41,37 @@ static std::string strip_outer_quotes(std::string s)
 static OptionMap parseFile(const std::filesystem::path& path)
 {
     OptionMap result;
-    std::ifstream file(path);
-    if (!file.is_open())
+    // Read as root before the privilege drop, from a directory the service account can write: never follow a link,
+    // and accept only a lone regular file that the account cannot have written.
+    const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0)
     {
-        throw std::runtime_error("Cannot open configuration file: " + path.string());
+        const int err = errno;
+        throw std::runtime_error("Cannot open configuration file: " + path.string() + ": " + std::strerror(err));
     }
 
+    struct stat st {};
+    if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_nlink != 1 || (st.st_uid != 0 && st.st_uid != geteuid())
+        || (st.st_mode & (S_IWGRP | S_IWOTH)))
+    {
+        ::close(fd);
+        throw std::runtime_error("Ignoring configuration file " + path.string()
+                                 + ": it must be a lone regular file owned by root, not writable by group or others");
+    }
+
+    __gnu_cxx::stdio_filebuf<char> fileBuf(fd, std::ios::in); // Owns fd once open, closes it on destruction
+    if (!fileBuf.is_open())
+    {
+        ::close(fd);
+        throw std::runtime_error("Cannot read configuration file: " + path.string());
+    }
+    std::istream file(&fileBuf);
+
     std::string line;
+    std::size_t lineNumber {0};
     while (std::getline(file, line))
     {
+        ++lineNumber;
         // Trim the line and skip empty lines or full-line comments
         line = base::utils::string::trim(line, " \t\r\n");
         if (line.empty() || line[0] == '#')
@@ -53,7 +82,8 @@ static OptionMap parseFile(const std::filesystem::path& path)
         auto pos_dot = line.find('.');
         if (pos_eq == std::string::npos || pos_dot == std::string::npos || pos_dot > pos_eq)
         {
-            LOG_WARNING("Invalid configuration line ignored: '{}'", line);
+            // By number only: the content of a file that is not a configuration file must not reach the log
+            LOG_WARNING("Invalid configuration line {} ignored", lineNumber);
             continue;
         }
 
