@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 #### Fixed
 
 - Fixed `wazuh-db` not escaping map keys in its HTTP responses, which let the operating system platform reported by an agent alter or break the counts of `GET /agents/summary`. ([#41545](https://github.com/wazuh/wazuh/pull/41545))
-- Fixed `wazuh-integratord` writing the alert location, rule ID and rule description unfiltered to the alert file of integrations that do not use the JSON alert format. These fields now get the same character filtering as the alert log.
+- Fixed `wazuh-integratord` writing the alert location, rule ID and rule description unfiltered to the alert file of integrations that do not use the JSON alert format. These fields now get the same character filtering as the alert log. ([#41599](https://github.com/wazuh/wazuh/pull/41599))
 
 ### Ruleset
 
