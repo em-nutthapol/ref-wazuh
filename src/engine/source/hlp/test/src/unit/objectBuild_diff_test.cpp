@@ -33,9 +33,11 @@
 
 namespace legacy
 {
-using hlp::unescape; // shared with production, untouched by the change
+// Not copied below, unlike the functions after the marker: this oracle calls the production unescape, whose
+// rule is pinned on its own by UnescapeDiff in parse_field_test.cpp.
+using hlp::unescape;
 
-// BEGIN copy of parse_field.cpp:90-139
+// BEGIN copy of parse_field.cpp, from convertDotToSlash to the end of updateDocImpl
 
 // TODO: evaluate which is the most suitable site for this functionality
 std::string convertDotToSlash(std::string_view key)
