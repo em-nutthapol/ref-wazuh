@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 - Added type validation for the `path` and `index` fields of FIM synchronization entries in `wazuh-db`. ([#41511](https://github.com/wazuh/wazuh/pull/41511))
 - Fixed `wazuh-remoted` not releasing the agent data it replaced on each agent startup message, and bounded the stored version. ([#41409](https://github.com/wazuh/wazuh/pull/41409))
 - Hardened the validation of the network inventory data in `wazuh-analysisd`. ([#41408](https://github.com/wazuh/wazuh/pull/41408))
+- Fixed `wazuh-integratord` writing the alert location, rule ID and rule description unfiltered to the alert file of integrations that do not use the JSON alert format. These fields now get the same character filtering as the alert log.
 
 ### Agent
 
