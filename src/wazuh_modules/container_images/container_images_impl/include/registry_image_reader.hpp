@@ -80,6 +80,18 @@ namespace containerimages
 
         /// @brief Source of private ECR tokens. Not owned. When null the reader calls AWS.
         IEcrTokenSource* ecrTokenSource {nullptr};
+
+        /// @brief What is stored for the engine a `<local>` reference names, one record per image. Not owned.
+        ///
+        /// An engine reader owns many rows, not one, so it is handed all of them: it recognises an
+        /// image it has read before, and carries a row over when the image cannot be read this time.
+        const std::vector<ImageReferenceRecord>* storedEngineImages {nullptr};
+
+        /// @brief Ids of the engine images already reported as over the per image allowance. Not owned.
+        ///
+        /// Lives with the module, since a reader lives for one scan and the warning is once per image,
+        /// not once per scan. An id is forgotten when the engine stops listing it.
+        std::set<std::string>* reportedOversizeImages {nullptr};
     };
 
     /// @brief Reads an image, and the packages it contains, from a remote registry.
