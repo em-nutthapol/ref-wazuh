@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - Fixed `wazuh-reportd` processing no alerts when reading them from a pipe or FIFO on stdin. ([#41737](https://github.com/wazuh/wazuh/pull/41737))
 - Fixed `wazuh-integratord` writing the alert location, rule ID and rule description unfiltered to the alert file of integrations that do not use the JSON alert format. These fields now get the same character filtering as the alert log. ([#41599](https://github.com/wazuh/wazuh/pull/41599))
 - Fixed analysisd rejecting an `<active-response>` whose `<command>` is defined later in `ossec.conf`. ([#41696](https://github.com/wazuh/wazuh/pull/41696))
+- Fixed `PUT /syscheck` and `PUT /rootcheck` reporting the manager (agent `000`) as affected without restarting its scan, and making `wazuh-remoted` log `(1320): Agent '000' not found` on every request. The manager scan is now restarted through the local `wazuh-syscheckd` socket. ([#41791](https://github.com/wazuh/wazuh/issues/41791))
 
 ### Ruleset
 
