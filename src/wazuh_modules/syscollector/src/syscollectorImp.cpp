@@ -77,6 +77,12 @@ do                                                                      \
 constexpr auto EMPTY_VALUE {""};
 constexpr auto UNKNOWN_VALUE {" "};
 
+// Container freshness: refresh a container this long after its last write to
+// an inventory source, at most once per gap, checking every tick.
+constexpr std::chrono::seconds FRESHNESS_QUIET {5};
+constexpr std::chrono::seconds FRESHNESS_GAP {30};
+constexpr std::chrono::seconds FRESHNESS_TICK {5};
+
 // RAII guard to ensure scanning flag is always cleaned up
 class ScanGuard
 {
@@ -600,6 +606,9 @@ Syscollector::Syscollector()
     , m_containerRowsPurged { false }
     , m_containerScanRequested { false }
     , m_refreshRequested { false }
+    , m_freshnessClasses { 0 }
+    , m_freshnessMarks { FRESHNESS_QUIET, FRESHNESS_GAP }
+    , m_freshnessTick { FRESHNESS_TICK }
     , m_containerCursorEpoch { 0 }
     , m_containerCursorSeq { 0 }
     , m_vdSyncEnabled { false }
@@ -1148,6 +1157,35 @@ void Syscollector::init(const std::shared_ptr<ISysInfo>& spInfo,
         m_refreshRequested = false;
     }
 
+    {
+        std::lock_guard<std::mutex> freshnessLock{m_freshnessMutex};
+        m_freshnessSources.clear();
+        // Packages only for now; users, groups and the OS record follow.
+        m_freshnessClasses = (containerBaseline && packages) ? CONTAINER_SOURCE_PACKAGES : 0;
+        m_freshnessMarks.clear();
+        m_freshnessAdmission.reset();
+#if defined(__linux__)
+        static_assert(CONTAINER_SOURCE_PACKAGES == CB_SOURCE_PACKAGES && CONTAINER_SOURCE_USERS == CB_SOURCE_USERS &&
+                      CONTAINER_SOURCE_OS == CB_SOURCE_OS);
+
+        std::size_t count = 0;
+        const cb_source_file_t* sources = cbaseline_source_files(&count);
+
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            if (sources[i].kind == CB_SOURCE_KIND_FILE || sources[i].kind == CB_SOURCE_KIND_WAL)
+            {
+                m_freshnessSources.push_back({sources[i].path, sources[i].classes, false});
+            }
+            else if (sources[i].kind == CB_SOURCE_KIND_DIRECTORY)
+            {
+                m_freshnessSources.push_back({sources[i].path, sources[i].classes, true});
+            }
+        }
+
+#endif
+    }
+
     m_spDBSync      = std::move(dbSync);
     m_spNormalizer  = std::move(normalizer);
     m_initialized   = true;
@@ -1278,6 +1316,20 @@ void Syscollector::start()
         m_containerNotifyThread = std::thread{[this] { containerNotifyLoop(); }};
     }
 
+#if defined(__linux__)
+    bool freshnessEnabled = false;
+    {
+        std::lock_guard<std::mutex> freshnessLock{m_freshnessMutex};
+        freshnessEnabled = m_freshnessClasses != 0 && !m_freshnessSources.empty();
+    }
+
+    if (freshnessEnabled)
+    {
+        m_freshnessThread = std::thread{[this] { freshnessLoop(); }};
+    }
+
+#endif
+
     std::unique_lock<std::mutex> scan_lock{m_scan_mutex};
     syncLoop(scan_lock);
 
@@ -1297,6 +1349,11 @@ void Syscollector::start()
     if (m_containerNotifyThread.joinable())
     {
         m_containerNotifyThread.join();
+    }
+
+    if (m_freshnessThread.joinable())
+    {
+        m_freshnessThread.join();
     }
 }
 
@@ -1415,6 +1472,12 @@ void Syscollector::quiesce()
         m_pauseCv.notify_all();
     }
     m_cv.notify_all();
+
+    {
+        // Under its mutex for the same reason as m_pauseCv above.
+        std::lock_guard<std::mutex> freshnessLock{m_freshnessMutex};
+        m_freshnessCv.notify_all();
+    }
 
     if (m_spSyncProtocol)
     {
@@ -4092,6 +4155,61 @@ void Syscollector::restoreRefreshPending(const std::vector<std::string>& contain
     m_refreshRequested = true;
 }
 
+void Syscollector::noteContainerFileEvent(const std::string& containerId, const std::string& path)
+{
+    std::lock_guard<std::mutex> freshnessLock{m_freshnessMutex};
+
+    if (isSourcePath(m_freshnessSources, path, m_freshnessClasses))
+    {
+        m_freshnessMarks.mark(containerId, FreshnessMarks::Clock::now());
+    }
+}
+
+void Syscollector::setFreshnessAdmission(std::set<std::string> admitted)
+{
+    std::lock_guard<std::mutex> freshnessLock{m_freshnessMutex};
+    m_freshnessAdmission = std::move(admitted);
+}
+
+void Syscollector::freshnessTick(FreshnessMarks::Clock::time_point now)
+{
+    std::vector<std::string> due;
+
+    {
+        std::lock_guard<std::mutex> freshnessLock{m_freshnessMutex};
+        due = m_freshnessMarks.takeDue(now, [this](const std::string & containerId)
+        {
+            return !m_freshnessAdmission || m_freshnessAdmission->count(containerId) != 0;
+        });
+    }
+
+    // Outside the freshness lock, and on every tick: a call with nothing due
+    // re-delivers a wake the scan thread may have missed.
+    requestContainerRefresh(due);
+}
+
+void Syscollector::freshnessLoop()
+{
+    std::unique_lock<std::mutex> freshnessLock{m_freshnessMutex};
+
+    while (!m_stopping.load())
+    {
+        m_freshnessCv.wait_for(freshnessLock, m_freshnessTick, [this]()
+        {
+            return m_stopping.load();
+        });
+
+        if (m_stopping.load())
+        {
+            break;
+        }
+
+        freshnessLock.unlock();
+        freshnessTick(FreshnessMarks::Clock::now());
+        freshnessLock.lock();
+    }
+}
+
 #if defined(__linux__)
 void Syscollector::containerNotifyLoop()
 {
@@ -4216,8 +4334,7 @@ void Syscollector::syncLoop(std::unique_lock<std::mutex>& scan_lock)
 
             // exchange, not load: a change arriving DURING the pass sets the
             // flag again and is served next time round rather than swallowed.
-            const auto pass = decideContainerPass(
-                now >= nextHostScan, m_containerScanRequested.exchange(false), m_refreshRequested.load());
+            const auto pass = decideContainerPass(now >= nextHostScan, m_containerScanRequested.exchange(false), m_refreshRequested.load());
 
             if (now >= nextHostScan)
             {
@@ -4322,8 +4439,7 @@ void Syscollector::syncLoop(std::unique_lock<std::mutex>& scan_lock)
         // exchange, not load: the request is consumed here, so a change
         // arriving DURING the pass sets it again and is served by the next
         // iteration rather than being swallowed by this one.
-        const auto pass = decideContainerPass(
-            now >= nextContainerScan, m_containerScanRequested.exchange(false), m_refreshRequested.load());
+        const auto pass = decideContainerPass(now >= nextContainerScan, m_containerScanRequested.exchange(false), m_refreshRequested.load());
 
         if (pass.run)
         {

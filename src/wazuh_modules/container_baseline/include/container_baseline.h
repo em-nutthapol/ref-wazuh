@@ -461,6 +461,30 @@ EXPORTED int cbaseline_list_containers_ex(const char*            connector_socke
                                           void*                  user_data,
                                           cb_list_status_t*      out_status);
 
+/* --- image source files -------------------------------------------------- *
+ *
+ * The in-container files packages, users, groups and the OS record are read
+ * from: a write to one of them is what makes a container's inventory stale.
+ * A caller must ignore a kind or class bit it does not know. */
+#define CB_SOURCE_PACKAGES (1u << 0)
+#define CB_SOURCE_USERS    (1u << 1)
+#define CB_SOURCE_OS       (1u << 2)
+
+#define CB_SOURCE_KIND_FILE      0 /* read as a whole */
+#define CB_SOURCE_KIND_DIRECTORY 1 /* the files directly inside it are read */
+#define CB_SOURCE_KIND_WAL       2 /* a database's write-ahead log */
+
+typedef struct
+{
+    const char*  path;    /* absolute in-container path */
+    unsigned int classes; /* CB_SOURCE_* bits */
+    int          kind;    /* CB_SOURCE_KIND_* */
+} cb_source_file_t;
+
+/* Returns the table and stores its length in *count. Static storage: valid for
+ * the life of the process. */
+EXPORTED const cb_source_file_t* cbaseline_source_files(size_t* count);
+
 #ifdef __cplusplus
 }
 #endif

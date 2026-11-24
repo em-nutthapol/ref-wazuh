@@ -112,6 +112,8 @@
     FRIEND_TEST(SyscollectorImpTest, AnUnkeyableContainerIsRankedLikeAnyOther);                                        \
     FRIEND_TEST(SyscollectorImpTest, ARefreshIsWalkedOnceWithTheDeltaAndCoveredByAFullPass);                           \
     FRIEND_TEST(SyscollectorImpTest, RefreshRequestsCoalesceAndSurviveAPassThatDidNotRun);                             \
+    FRIEND_TEST(SyscollectorImpTest, AFreshnessTickRequestsTheContainersWhoseSourcesWereWritten);                      \
+    FRIEND_TEST(SyscollectorImpTest, TheFreshnessThreadHandsASettledWriteToTheScanThread);                             \
     FRIEND_TEST(SyscollectorImpTest, AnIncompleteListingThatNamesItsUnkeyedIdsStillArmsTheRestartReconcile)
 #else
 #define SYSCOLLECTOR_FRIEND_TEST_DECLARATIONS

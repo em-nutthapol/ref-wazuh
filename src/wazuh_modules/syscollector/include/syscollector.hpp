@@ -25,6 +25,7 @@
 #include "syscollectorNormalizer.hpp"
 #include "syscollector.h"
 #include "syscollector_defs.hpp"
+#include "containerFreshness.hpp"
 #include "asyncFlushController.hpp"
 #include "agent_sync_protocol_types.hpp"
 #include "iagent_sync_protocol.hpp"
@@ -212,6 +213,16 @@ class EXPORTED Syscollector final
         /// nothing new. Linux only.
         void requestContainerRefresh(const std::vector<std::string>& containerIds);
 
+        /// A file was written inside a container. Marks the container for a
+        /// refresh when the path is one of its inventory sources; the control
+        /// thread hands it to the scan thread once its writes have settled.
+        /// Never waits on a scan.
+        void noteContainerFileEvent(const std::string& containerId, const std::string& path);
+
+        /// Which containers may report. Marks for any other container are
+        /// dropped instead of refreshed. Until called, every container counts.
+        void setFreshnessAdmission(std::set<std::string> admitted);
+
         // Mutex access for external synchronization (e.g., from wm_sync_module)
         void lockScanMutex();
         void unlockScanMutex();
@@ -391,6 +402,10 @@ class EXPORTED Syscollector final
         std::vector<std::string> takeRefreshPending();
         /// Puts back requests a pass that did not run was handed.
         void restoreRefreshPending(const std::vector<std::string>& containerIds);
+        /// Hands the containers due at `now` to the scan thread.
+        void freshnessTick(FreshnessMarks::Clock::time_point now);
+        /// Runs freshnessTick() every m_freshnessTick until m_stopping.
+        void freshnessLoop();
         void syncLoop(std::unique_lock<std::mutex>& scan_lock);
         bool pause();
         void resume();
@@ -948,6 +963,17 @@ class EXPORTED Syscollector final
         std::set<std::string>                                                    m_refreshPending;
         std::mutex                                                               m_refreshMutex;
         std::atomic<bool>                                                        m_refreshRequested;
+        // The freshness control thread's state, all under m_freshnessMutex: the
+        // source files a write to marks a container, the classes enabled, the
+        // marks, and which containers may report (unset: all of them).
+        std::mutex                                                               m_freshnessMutex;
+        std::condition_variable                                                  m_freshnessCv;
+        std::vector<FreshnessSource>                                             m_freshnessSources;
+        unsigned                                                                 m_freshnessClasses;
+        FreshnessMarks                                                           m_freshnessMarks;
+        std::optional<std::set<std::string>>                                     m_freshnessAdmission;
+        FreshnessMarks::Clock::duration                                          m_freshnessTick;
+        std::thread                                                              m_freshnessThread;
         // Blocks on the notification socket. Started only when the container
         // baseline is enabled: with it off there is nothing to bring forward.
         std::thread                                                              m_containerNotifyThread;

@@ -8993,7 +8993,9 @@ TEST_F(SyscollectorImpTest, ARefreshIsWalkedOnceWithTheDeltaAndCoveredByAFullPas
 
     containerListHook = [](cb_container_id_sink_t sink, void* ctx)
     {
-        for (const auto* id : {"a", "b", "c"}) sink(id, 1, ctx);
+        const char* const ids[] = {"a", "b", "c"};
+
+        for (const auto* id : ids) sink(id, 1, ctx);
 
         return 3;
     };
@@ -9024,7 +9026,9 @@ TEST_F(SyscollectorImpTest, ARefreshIsWalkedOnceWithTheDeltaAndCoveredByAFullPas
     targeted.clear();
     containerLifecycleHook = [](cb_lifecycle_sink_t sink, void* ctx)
     {
-        for (const auto* id : {"b", "c"})
+        const char* const ids[] = {"b", "c"};
+
+        for (const auto* id : ids)
         {
             cb_lifecycle_event_t event {};
             event.container_id = id;
@@ -9121,7 +9125,9 @@ namespace
 
         containerListHook = [](cb_container_id_sink_t sink, void* ctx)
         {
-            for (const auto* id : {"abc", "def"}) sink(id, 1, ctx);
+            const char* const ids[] = {"abc", "def"};
+
+            for (const auto* id : ids) sink(id, 1, ctx);
 
             return 2;
         };
@@ -9220,6 +9226,106 @@ TEST_F(SyscollectorImpTest, aRefreshRequestedWhilePausedRunsAfterResume)
     EXPECT_TRUE(run.targetedWhilePaused.empty()) << "a paused module must not walk";
     EXPECT_EQ(run.targeted, (std::vector<std::vector<std::string>> {{"abc", "def"}}))
             << "the request has to survive the pause rather than wait out an interval";
+#endif
+}
+
+// A write to a container's inventory source becomes a refresh request once it
+// settles, and nothing else does.
+TEST_F(SyscollectorImpTest, AFreshnessTickRequestsTheContainersWhoseSourcesWereWritten)
+{
+#if defined(__linux__)
+    const auto info = std::make_shared<MockSysInfo>();
+    EXPECT_CALL(*info, releaseThreadResources()).Times(testing::AnyNumber());
+    auto& module = Syscollector::instance();
+    module.init(info, reportFunction, persistFunction, logFunction, SYSCOLLECTOR_DB_PATH, "", "", 3600,
+                false, false, false, false, true, false, false, false, false, false, false, false, false, false,
+                true, 0);
+    static_cast<void>(module.takeRefreshPending());
+
+    const auto now = FreshnessMarks::Clock::now();
+    module.noteContainerFileEvent("abc", "/var/lib/dpkg/status");
+    module.noteContainerFileEvent("def", "/app/status");
+    module.noteContainerFileEvent("ghi", "/usr/lib/sysimage/rpm/rpmdb.sqlite-wal");
+
+    module.freshnessTick(now);
+    EXPECT_TRUE(module.takeRefreshPending().empty()) << "nothing is due before the quiet period";
+
+    module.freshnessTick(now + std::chrono::seconds{6});
+    EXPECT_EQ(module.takeRefreshPending(), (std::vector<std::string> {"abc", "ghi"}));
+
+    // Once admission is known, a refused container's write is dropped.
+    module.setFreshnessAdmission({"abc"});
+    module.noteContainerFileEvent("jkl", "/var/lib/dpkg/status");
+    module.freshnessTick(now + std::chrono::seconds{60});
+    EXPECT_TRUE(module.takeRefreshPending().empty());
+
+    module.destroy();
+#else
+    GTEST_SKIP() << "Container freshness is Linux-only";
+#endif
+}
+
+TEST_F(SyscollectorImpTest, TheFreshnessThreadHandsASettledWriteToTheScanThread)
+{
+#if defined(__linux__)
+    struct ResetHooks
+    {
+        ~ResetHooks()
+        {
+            containerScanHook = {};
+            containerScanForHook = {};
+            containerListHook = {};
+            containerLifecycleHook = {};
+        }
+    } resetHooks;
+
+    std::mutex walkedMutex;
+    std::vector<std::vector<std::string>> walked;
+    containerListHook = [](cb_container_id_sink_t sink, void* ctx)
+    {
+        sink("abc", 1, ctx);
+        return 1;
+    };
+    containerLifecycleHook = [](cb_lifecycle_sink_t, void*)
+    {
+        return 0;
+    };
+    containerScanForHook = [&](const std::vector<std::string>& ids)
+    {
+        std::lock_guard<std::mutex> lock(walkedMutex);
+        walked.push_back(ids);
+        return static_cast<int>(ids.size());
+    };
+    containerScanHook = [](cb_dbsync_row_sink_t, cb_container_status_sink_t, void*)
+    {
+        return 0;
+    };
+
+    const auto info = std::make_shared<MockSysInfo>();
+    EXPECT_CALL(*info, releaseThreadResources()).Times(testing::AnyNumber());
+    auto& module = Syscollector::instance();
+    module.init(info, reportFunction, persistFunction, logFunction, SYSCOLLECTOR_DB_PATH, "", "", 100,
+                false, false, false, false, true, false, false, false, false, false, false, false, false, false,
+                true, 100);
+    module.m_freshnessMarks = FreshnessMarks {std::chrono::milliseconds{200}, std::chrono::seconds{30}};
+    module.m_freshnessTick = std::chrono::milliseconds{100};
+
+    std::thread worker {[] { Syscollector::instance().start(); }};
+    std::this_thread::sleep_for(std::chrono::seconds{1});
+
+    module.noteContainerFileEvent("abc", "/var/lib/dpkg/status");
+    std::this_thread::sleep_for(std::chrono::seconds{2});
+    module.destroy();
+
+    if (worker.joinable())
+    {
+        worker.join();
+    }
+
+    std::lock_guard<std::mutex> lock(walkedMutex);
+    EXPECT_EQ(walked, (std::vector<std::vector<std::string>> {{"abc"}}));
+#else
+    GTEST_SKIP() << "Container freshness is Linux-only";
 #endif
 }
 

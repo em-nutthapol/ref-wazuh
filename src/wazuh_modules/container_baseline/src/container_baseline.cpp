@@ -2,6 +2,7 @@
 
 #include "container_baseline_scanner.hpp"
 #include "container_instances_client.hpp"
+#include "image_source_files.hpp"
 
 #include <cstddef>
 #include <functional>
@@ -344,4 +345,46 @@ extern "C" int cbaseline_list_containers_ex(const char*            connector_soc
 extern "C" int cbaseline_list_containers(const char* connector_socket_path, cb_container_id_sink_t sink, void* user_data)
 {
     return cbaseline_list_containers_ex(connector_socket_path, sink, user_data, nullptr);
+}
+
+static_assert(CB_SOURCE_PACKAGES == wazuh::container_baseline::IMAGE_SOURCE_PACKAGES);
+static_assert(CB_SOURCE_USERS == wazuh::container_baseline::IMAGE_SOURCE_USERS);
+static_assert(CB_SOURCE_OS == wazuh::container_baseline::IMAGE_SOURCE_OS);
+
+extern "C" const cb_source_file_t* cbaseline_source_files(size_t* count)
+{
+    using wazuh::container_baseline::ImageSourceKind;
+
+    static const std::vector<cb_source_file_t> table = []
+    {
+        std::size_t size = 0;
+        const auto* files = wazuh::container_baseline::ImageSourceFiles(size);
+        std::vector<cb_source_file_t> out;
+        out.reserve(size);
+
+        for (std::size_t i = 0; i < size; ++i)
+        {
+            int kind = CB_SOURCE_KIND_FILE;
+
+            if (files[i].kind == ImageSourceKind::directory)
+            {
+                kind = CB_SOURCE_KIND_DIRECTORY;
+            }
+            else if (files[i].kind == ImageSourceKind::wal)
+            {
+                kind = CB_SOURCE_KIND_WAL;
+            }
+
+            out.push_back({files[i].path, files[i].classes, kind});
+        }
+
+        return out;
+    }();
+
+    if (count != nullptr)
+    {
+        *count = table.size();
+    }
+
+    return table.data();
 }
