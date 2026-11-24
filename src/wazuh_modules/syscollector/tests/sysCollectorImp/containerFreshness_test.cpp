@@ -118,7 +118,8 @@ TEST(ContainerFreshnessMarksTest, ANonAdmittedContainerIsDroppedNotRefreshed)
         return id != "refused";
     });
     EXPECT_EQ(due, (std::vector<std::string> {"a"}));
-    EXPECT_TRUE(marks.takeDue(t0 + seconds{40}, ADMIT_ALL).empty()) << "the refused mark is gone, not deferred";
+    EXPECT_EQ(marks.takeDue(t0 + seconds{40}, ADMIT_ALL), (std::vector<std::string> {"a"}))
+            << "a's follow-up only: the refused mark is gone, not deferred";
 }
 
 TEST(ContainerFreshnessMarksTest, SettledContainersArePruned)
@@ -128,7 +129,59 @@ TEST(ContainerFreshnessMarksTest, SettledContainersArePruned)
 
     marks.mark("a", t0);
     ASSERT_EQ(marks.takeDue(t0 + seconds{5}, ADMIT_ALL).size(), 1u);
+    ASSERT_EQ(marks.takeDue(t0 + seconds{35}, ADMIT_ALL).size(), 1u) << "the follow-up";
     EXPECT_EQ(marks.size(), 1u) << "kept while its gap runs";
-    static_cast<void>(marks.takeDue(t0 + seconds{40}, ADMIT_ALL));
+    static_cast<void>(marks.takeDue(t0 + seconds{70}, ADMIT_ALL));
     EXPECT_EQ(marks.size(), 0u);
+}
+
+TEST(ContainerFreshnessMarksTest, ARefreshBringsOneFollowUpAGapLater)
+{
+    // rpm on BerkeleyDB marks only the start of a transaction: the first
+    // refresh may read it mid-way, the follow-up reads where it ended.
+    FreshnessMarks marks {seconds{5}, seconds{30}};
+    const auto t0 = Clock::time_point {} + seconds{1000};
+
+    marks.mark("a", t0);
+    EXPECT_EQ(marks.takeDue(t0 + seconds{5}, ADMIT_ALL), (std::vector<std::string> {"a"}));
+    EXPECT_TRUE(marks.takeDue(t0 + seconds{20}, ADMIT_ALL).empty());
+    EXPECT_EQ(marks.takeDue(t0 + seconds{35}, ADMIT_ALL), (std::vector<std::string> {"a"}));
+    EXPECT_TRUE(marks.takeDue(t0 + seconds{70}, ADMIT_ALL).empty()) << "a follow-up brings no follow-up";
+}
+
+TEST(ContainerFreshnessMarksTest, AWriteBeforeTheFollowUpIsServedOnceInItsPlace)
+{
+    FreshnessMarks marks {seconds{5}, seconds{30}};
+    const auto t0 = Clock::time_point {} + seconds{1000};
+
+    marks.mark("a", t0);
+    ASSERT_EQ(marks.takeDue(t0 + seconds{5}, ADMIT_ALL).size(), 1u);
+
+    marks.mark("a", t0 + seconds{10});
+    EXPECT_EQ(marks.takeDue(t0 + seconds{35}, ADMIT_ALL), (std::vector<std::string> {"a"}));
+    EXPECT_TRUE(marks.takeDue(t0 + seconds{40}, ADMIT_ALL).empty()) << "one refresh, not two";
+    EXPECT_EQ(marks.takeDue(t0 + seconds{65}, ADMIT_ALL), (std::vector<std::string> {"a"}))
+            << "the write brings its own follow-up";
+}
+
+TEST(ContainerFreshnessNameListsTest, EachEnabledNameOnce)
+{
+    const std::vector<FreshnessSource> sources
+    {
+        {"/etc/passwd", CONTAINER_SOURCE_USERS, false},
+        {"/etc/os-release", CONTAINER_SOURCE_OS, false},
+        {"/usr/lib/os-release", CONTAINER_SOURCE_OS, false},
+        {"/var/lib/dpkg/status", CONTAINER_SOURCE_PACKAGES, false},
+        {"/var/lib/dpkg/status.d", CONTAINER_SOURCE_PACKAGES, true},
+        {"/var/lib/rpm/rpmdb.sqlite", CONTAINER_SOURCE_PACKAGES, false},
+        {"/usr/lib/sysimage/rpm/rpmdb.sqlite", CONTAINER_SOURCE_PACKAGES, false},
+    };
+
+    const auto packages = nameFilterLists(sources, CONTAINER_SOURCE_PACKAGES);
+    EXPECT_EQ(packages.first, (std::vector<std::string> {"rpmdb.sqlite", "status"}));
+    EXPECT_EQ(packages.second, (std::vector<std::string> {"status.d"}));
+
+    const auto os = nameFilterLists(sources, CONTAINER_SOURCE_OS);
+    EXPECT_EQ(os.first, (std::vector<std::string> {"os-release"}));
+    EXPECT_TRUE(os.second.empty());
 }

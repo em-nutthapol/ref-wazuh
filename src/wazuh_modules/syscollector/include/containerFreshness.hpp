@@ -14,7 +14,9 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 /// Inventory classes a source feeds; the same bits as container_baseline's
@@ -90,6 +92,30 @@ struct FreshnessSource
     return false;
 }
 
+/// The kernel name filter's two lists for the enabled classes: the file names
+/// of the sources, and the names of the directories whose files are sources.
+/// Each name once.
+[[nodiscard]] inline std::pair<std::vector<std::string>, std::vector<std::string>> nameFilterLists(const std::vector<FreshnessSource>& sources,
+                                                                                                   unsigned enabledClasses)
+{
+    std::set<std::string> files;
+    std::set<std::string> parents;
+
+    for (const auto& source : sources)
+    {
+        const auto slash = source.path.rfind('/');
+
+        if ((source.classes & enabledClasses) == 0 || slash == std::string::npos || slash + 1 == source.path.size())
+        {
+            continue;
+        }
+
+        (source.directory ? parents : files).insert(source.path.substr(slash + 1));
+    }
+
+    return {{files.begin(), files.end()}, {parents.begin(), parents.end()}};
+}
+
 /// Which containers had a source written, and when each is due a refresh: a
 /// quiet period after its last write, so a package manager rewriting its
 /// database several times is walked once when it is done, and at most once per
@@ -109,11 +135,16 @@ class FreshnessMarks
         {
             auto& entry = m_entries[containerId];
             entry.dirty = true;
+            entry.followUp = false;
             entry.dueAt = now + m_quiet;
         }
 
         /// The containers due now, stamped as requested. A due container
         /// `isAdmitted` refuses is dropped: its refresh would report nothing.
+        ///
+        /// Each refresh brings one follow-up a gap later: a writer that marks
+        /// only the start of its work (rpm on BerkeleyDB) is read mid-way by
+        /// the first, and its final state is read by the second.
         std::vector<std::string> takeDue(Clock::time_point now, const std::function<bool(const std::string&)>& isAdmitted)
         {
             std::vector<std::string> due;
@@ -125,13 +156,22 @@ class FreshnessMarks
 
                 if (entry.dirty && entry.dueAt <= now && gapElapsed)
                 {
+                    const bool wasFollowUp = entry.followUp;
                     entry.dirty = false;
+                    entry.followUp = false;
 
                     if (isAdmitted(it->first))
                     {
                         due.push_back(it->first);
                         entry.requested = true;
                         entry.lastRequested = now;
+
+                        if (!wasFollowUp)
+                        {
+                            entry.dirty = true;
+                            entry.followUp = true;
+                            entry.dueAt = now + m_gap;
+                        }
                     }
                 }
 
@@ -163,6 +203,8 @@ class FreshnessMarks
         struct Entry
         {
             bool              dirty {false};
+            /// The pending refresh is the follow-up of one already served.
+            bool              followUp {false};
             Clock::time_point dueAt {};
             bool              requested {false};
             Clock::time_point lastRequested {};

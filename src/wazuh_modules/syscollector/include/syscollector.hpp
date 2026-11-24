@@ -219,6 +219,10 @@ class EXPORTED Syscollector final
         /// Never waits on a scan.
         void noteContainerFileEvent(const std::string& containerId, const std::string& path);
 
+        /// A container's events may have been lost: marks it as if a source
+        /// had been written.
+        void noteContainerChanged(const std::string& containerId);
+
         /// Which containers may report. Marks for any other container are
         /// dropped instead of refreshed. Until called, every container counts.
         void setFreshnessAdmission(std::set<std::string> admitted);
@@ -974,6 +978,11 @@ class EXPORTED Syscollector final
         std::optional<std::set<std::string>>                                     m_freshnessAdmission;
         FreshnessMarks::Clock::duration                                          m_freshnessTick;
         std::thread                                                              m_freshnessThread;
+        // Set by the lifecycle watcher so the eBPF poller re-reads the container
+        // list, and allowlists a new container, without waiting for its interval.
+        std::atomic<bool>                                                        m_freshnessListRefresh;
+        // Whether start() opens the eBPF poller; unit tests turn it off.
+        bool                                                                     m_freshnessPollerEnabled;
         // Blocks on the notification socket. Started only when the container
         // baseline is enabled: with it off there is nothing to bring forward.
         std::thread                                                              m_containerNotifyThread;
