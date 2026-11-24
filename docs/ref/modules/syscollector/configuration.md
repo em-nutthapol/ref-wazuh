@@ -209,6 +209,26 @@ How often every container is inventoried, independent of the wodle's `interval`.
 </container_security>
 ```
 
+### Package changes inside a container
+
+When container inventory and `<packages>` are both enabled, a write to a
+container's package database refreshes that container's inventory without
+waiting for the `interval`: dpkg's `status` file and `status.d` entries, apk's
+`installed` file, and rpm's database (`rpmdb.sqlite` and its `-wal`, or the
+BerkeleyDB `Packages` file). The refresh runs 5 seconds after the writes stop,
+then once more 30 seconds later, and at most once per 30 seconds per container;
+a container whose database is touched without pause is refreshed every 30
+seconds. The new inventory state reaches the indexer on the next
+synchronization cycle.
+
+Writes are detected with eBPF and are Linux only. When the eBPF engine cannot
+be used, this is logged once and container inventory keeps its `interval` and
+the Container Instances notifications:
+
+```
+INFO: Container inventory: eBPF change detection is not available (<reason>); container changes are picked up by the periodic pass.
+```
+
 ---
 
 ## Synchronization Configuration
