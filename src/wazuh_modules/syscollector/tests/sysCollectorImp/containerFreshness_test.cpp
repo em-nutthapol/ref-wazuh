@@ -94,6 +94,26 @@ TEST(ContainerFreshnessMarksTest, AContainerIsRefreshedAtMostOncePerGapAndKeepsI
             << "the write inside the gap is not lost, only held";
 }
 
+TEST(ContainerFreshnessMarksTest, AContainerThatNeverStopsWritingIsStillRefreshedOncePerGap)
+{
+    FreshnessMarks marks {seconds{5}, seconds{30}};
+    const auto t0 = Clock::time_point {} + seconds{1000};
+    std::vector<seconds> refreshedAt;
+
+    // A write every 2 s never leaves a quiet period.
+    for (seconds t {0}; t <= seconds{70}; t += seconds{2})
+    {
+        marks.mark("a", t0 + t);
+
+        if (!marks.takeDue(t0 + t, ADMIT_ALL).empty())
+        {
+            refreshedAt.push_back(t);
+        }
+    }
+
+    EXPECT_EQ(refreshedAt, (std::vector<seconds> {seconds{30}, seconds{62}}));
+}
+
 TEST(ContainerFreshnessMarksTest, ContainersAreIndependent)
 {
     FreshnessMarks marks {seconds{5}, seconds{30}};

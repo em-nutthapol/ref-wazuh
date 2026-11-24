@@ -11,6 +11,7 @@
 #ifndef _CONTAINER_FRESHNESS_HPP
 #define _CONTAINER_FRESHNESS_HPP
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <map>
@@ -131,12 +132,21 @@ class FreshnessMarks
         {
         }
 
+        /// Due a quiet period after this write, but no later than a gap after
+        /// the first write not yet served, so a container that never stops
+        /// writing is still refreshed.
         void mark(const std::string& containerId, Clock::time_point now)
         {
             auto& entry = m_entries[containerId];
+
+            if (!entry.dirty || entry.followUp)
+            {
+                entry.firstWrite = now;
+            }
+
             entry.dirty = true;
             entry.followUp = false;
-            entry.dueAt = now + m_quiet;
+            entry.dueAt = std::min(now + m_quiet, entry.firstWrite + m_gap);
         }
 
         /// The containers due now, stamped as requested. A due container
@@ -206,6 +216,8 @@ class FreshnessMarks
             /// The pending refresh is the follow-up of one already served.
             bool              followUp {false};
             Clock::time_point dueAt {};
+            /// The first write since the last refresh was handed out.
+            Clock::time_point firstWrite {};
             bool              requested {false};
             Clock::time_point lastRequested {};
         };
