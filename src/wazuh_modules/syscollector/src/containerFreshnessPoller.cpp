@@ -284,12 +284,29 @@ void ContainerFreshnessPoller::refreshList(bool seeding)
     std::set<std::string> changed {applied.escalate.begin(), applied.escalate.end()};
 
     // A container's writes before its cgroup was allowed never reached here.
-    // Not on the seed: the startup pass walks every container anyway.
+    // Not on the seed: the startup pass walks every container anyway. Only its
+    // primary cgroup: an init system inside a container adds one per unit it
+    // starts, and a timer would otherwise re-check the container every gap.
     if (m_filtering && !seeding)
     {
+        std::set<std::uint64_t> primaries;
+
+        for (const auto& container : delta.containers)
+        {
+            primaries.insert(container.cgroupId);
+        }
+
+        for (const auto& event : delta.events)
+        {
+            primaries.insert(event.cgroupId);
+        }
+
         for (const auto& entry : applied.added)
         {
-            changed.insert(entry.second);
+            if (primaries.count(entry.first) != 0)
+            {
+                changed.insert(entry.second);
+            }
         }
     }
 
