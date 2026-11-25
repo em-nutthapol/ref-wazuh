@@ -192,6 +192,7 @@
 
 | Issue | Comment |
 |-------|---------|
+| [#41420](https://github.com/wazuh/wazuh/issues/41420) | Fixed a restart sent by the manager leaving the agent stopped when its configuration is broken: the agent now tests the configuration first and keeps running if the test fails. |
 | [#41678](https://github.com/wazuh/wazuh/issues/41678) | Fixed the CIS audit configuration file mode checks in the AlmaLinux 9 and 10, Rocky Linux 9 and 10, and Ubuntu 22.04 policies failing compliant hosts and passing hosts with 644 files: their rule chained a second ` -> ` that the SCA parser reads as part of one pattern. |
 | [#41803](https://github.com/wazuh/wazuh/issues/41803) | Fixed the process inventory splitting `process.args` on commas and joining arguments that contain spaces, reporting only the executable as `process.command_line` on Linux, counting characters instead of arguments in Windows `process.args_count`, and reporting a `modified` event on every scan for Windows processes whose command line holds NUL characters, such as `WmiPrvSE.exe`. |
 | [#39182](https://github.com/wazuh/wazuh/issues/39182) | Reported launchd `ProgramArguments`, `WatchPaths` and `QueueDirectories` on macOS as one array element per plist entry instead of a single space-joined string. |
