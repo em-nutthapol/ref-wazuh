@@ -96,7 +96,7 @@ ListRule *OS_AddListRule(ListRule *first_rule_list, int lookup_type, int field,
         os_free(new_rulelist_pt);
         return NULL;
     }
-    
+
     new_rulelist_pt->loaded = 1;
 
     if (first_rule_list == NULL) {
@@ -306,10 +306,7 @@ int OS_DBSearch(ListRule *lrule, char *key, ListNode **l_node)
             }
             return 0;
         case LR_ADDRESS_MATCH_VALUE:
-            if (OS_DBSearchKeyAddressValue(lrule, key) == 0) {
-                return 1;
-            }
-            return 0;
+            return OS_DBSearchKeyAddressValue(lrule, key);
         default:
             mdebug1("lists_list.c::OS_DBSearch should never hit default");
             return 0;

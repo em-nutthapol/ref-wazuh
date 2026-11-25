@@ -16,6 +16,7 @@
 #include "../../headers/shared.h"
 #include "../../analysisd/rules.h"
 #include "../../analysisd/cdb/cdb.h"
+#include "../../analysisd/cdb/cdb_make.h"
 #include "../../analysisd/analysisd.h"
 #include <fcntl.h>
 #include <stdlib.h>
@@ -27,9 +28,77 @@ void os_remove_cdbrules(ListRule **l_rule);
 ListNode *OS_FindList(const char *listname, ListNode **l_node);
 void OS_ListLoadRules(ListNode **l_node, ListRule **lrule);
 
+void __real_OSMatch_FreePattern(OSMatch *reg);
+
 /* setup/teardown */
 
+typedef struct address_value_state {
+    char cdb_path[PATH_MAX];
+    ListNode *node;
+    ListRule *rule;
+} address_value_state;
 
+/* Builds a CDB list with a full address and a subnet prefix entry, and an
+ * address_match_key_value rule over it whose check_value is "funny". */
+static int setup_address_match_value(void **state) {
+    address_value_state *data;
+    os_calloc(1, sizeof(address_value_state), data);
+
+    snprintf(data->cdb_path, sizeof(data->cdb_path), "/tmp/test_lists_list_XXXXXX");
+    int fd = mkstemp(data->cdb_path);
+    if (fd < 0) {
+        os_free(data);
+        return -1;
+    }
+
+    FILE *fp = fdopen(fd, "w+");
+    struct cdb_make cdbm;
+    cdb_make_start(&cdbm, fp);
+    cdb_make_add(&cdbm, "10.10.10.10", strlen("10.10.10.10"), "funny", strlen("funny"));
+    cdb_make_add(&cdbm, "172.16.0.1", strlen("172.16.0.1"), "serious", strlen("serious"));
+    cdb_make_add(&cdbm, "192.168.", strlen("192.168."), "funny", strlen("funny"));
+    cdb_make_add(&cdbm, "10.20.", strlen("10.20."), "serious", strlen("serious"));
+    cdb_make_finish(&cdbm);
+    fclose(fp);
+
+    os_calloc(1, sizeof(ListNode), data->node);
+    os_strdup(data->cdb_path, data->node->cdb_filename);
+    os_strdup("ssh-watch-list", data->node->txt_filename);
+    data->node->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
+
+    os_calloc(1, sizeof(ListRule), data->rule);
+    data->rule->loaded = 1;
+    data->rule->lookup_type = LR_ADDRESS_MATCH_VALUE;
+    data->rule->field = RULE_SRCIP;
+    data->rule->db = data->node;
+    data->rule->mutex = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
+    os_calloc(1, sizeof(OSMatch), data->rule->matcher);
+    if (!OSMatch_Compile("funny", data->rule->matcher, 0)) {
+        return -1;
+    }
+
+    *state = data;
+    return 0;
+}
+
+static int teardown_address_match_value(void **state) {
+    address_value_state *data = *state;
+
+    if (data->node->loaded) {
+        cdb_free(&data->node->cdb);
+        close(data->node->cdb.fd);
+    }
+    unlink(data->cdb_path);
+
+    __real_OSMatch_FreePattern(data->rule->matcher);
+    os_free(data->rule->matcher);
+    os_free(data->rule);
+    os_free(data->node->cdb_filename);
+    os_free(data->node->txt_filename);
+    os_free(data->node);
+    os_free(data);
+    return 0;
+}
 
 /* wraps */
 
@@ -203,6 +272,45 @@ void test_OS_ListLoadRules_already_load(void ** state) {
     os_free(lrule);
 }
 
+/* OS_DBSearch with address_match_key_value */
+void test_OS_DBSearch_address_match_value_ip_value_match(void **state) {
+    address_value_state *data = *state;
+
+    assert_int_equal(OS_DBSearch(data->rule, "10.10.10.10", &data->node), 1);
+}
+
+void test_OS_DBSearch_address_match_value_ip_value_mismatch(void **state) {
+    address_value_state *data = *state;
+
+    assert_int_equal(OS_DBSearch(data->rule, "172.16.0.1", &data->node), 0);
+}
+
+void test_OS_DBSearch_address_match_value_subnet_value_match(void **state) {
+    address_value_state *data = *state;
+
+    assert_int_equal(OS_DBSearch(data->rule, "192.168.1.25", &data->node), 1);
+}
+
+void test_OS_DBSearch_address_match_value_subnet_value_mismatch(void **state) {
+    address_value_state *data = *state;
+
+    assert_int_equal(OS_DBSearch(data->rule, "10.20.30.40", &data->node), 0);
+}
+
+void test_OS_DBSearch_address_match_value_not_listed(void **state) {
+    address_value_state *data = *state;
+
+    assert_int_equal(OS_DBSearch(data->rule, "8.8.8.8", &data->node), 0);
+}
+
+void test_OS_DBSearch_address_match_value_no_list(void **state) {
+    address_value_state *data = *state;
+
+    data->rule->db = NULL;
+
+    assert_int_equal(OS_DBSearch(data->rule, "10.10.10.10", &data->node), 0);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -220,6 +328,13 @@ int main(void)
         cmocka_unit_test(test_OS_ListLoadRules_list_checked),
         cmocka_unit_test(test_OS_ListLoadRules_list_checked_and_load),
         cmocka_unit_test(test_OS_ListLoadRules_already_load),
+        // Tests OS_DBSearch with address_match_key_value
+        cmocka_unit_test_setup_teardown(test_OS_DBSearch_address_match_value_ip_value_match, setup_address_match_value, teardown_address_match_value),
+        cmocka_unit_test_setup_teardown(test_OS_DBSearch_address_match_value_ip_value_mismatch, setup_address_match_value, teardown_address_match_value),
+        cmocka_unit_test_setup_teardown(test_OS_DBSearch_address_match_value_subnet_value_match, setup_address_match_value, teardown_address_match_value),
+        cmocka_unit_test_setup_teardown(test_OS_DBSearch_address_match_value_subnet_value_mismatch, setup_address_match_value, teardown_address_match_value),
+        cmocka_unit_test_setup_teardown(test_OS_DBSearch_address_match_value_not_listed, setup_address_match_value, teardown_address_match_value),
+        cmocka_unit_test_setup_teardown(test_OS_DBSearch_address_match_value_no_list, setup_address_match_value, teardown_address_match_value),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);
