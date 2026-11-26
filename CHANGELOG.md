@@ -68,6 +68,7 @@ All notable changes to this project will be documented in this file.
 - Hardened how FIM creates its Auditd health check and plugin configuration files. ([#41694](https://github.com/wazuh/wazuh/pull/41694))
 - Fixed remote upgrades ending as `Timeout` on Windows agents with only PowerShell 2.0, such as Windows 7 SP1 without WMF 3.0 or later. ([#41606](https://github.com/wazuh/wazuh/pull/41606))
 - Fixed `wazuh-control` leaving agent daemons stopped when a reload took more than 45 s, running a second instance of a daemon when a restart arrived during a reload, and refusing to start, stop or report the status after a reboot when its old start lock held the PID of another process. ([#41829](https://github.com/wazuh/wazuh/pull/41829))
+- Fixed FIM who-data on Windows rewriting the SACL of every file and folder under a monitored directory each time an event made it rescan the directory, which made Windows Search re-index them. ([#41898](https://github.com/wazuh/wazuh/pull/41898))
 
 ### Ruleset
 
