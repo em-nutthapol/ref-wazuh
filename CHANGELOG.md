@@ -33,6 +33,7 @@ All notable changes to this project will be documented in this file.
 #### Fixed
 
 - Fixed AWS Inspector wodle not collecting findings after AWS retired the Classic API. ([#39017](https://github.com/wazuh/wazuh/pull/39017))
+- Hardened how the agent handles requests received from the manager. ([#41927](https://github.com/wazuh/wazuh/pull/41927))
 
 ### RESTful API
 
